@@ -26,7 +26,7 @@ def args_str(args):
 
 # Convolutions
 def conv_inputs(conv, batch_size, size):
-    print(f'Tensor({batch_size}, {conv.in_channels}, {args_str(size)})')
+    print(f'  Tensor({batch_size}, {conv.in_channels}, {args_str(size)})')
     return torch.randn(batch_size, conv.in_channels, *size).cuda(),
 
 
@@ -67,7 +67,7 @@ convolutions = {
 
 # Pooling
 def pool_inputs(conv, batch_size, size):
-    print(f'Tensor({batch_size}, {args_str(size)})')
+    print(f'  Tensor({batch_size}, {args_str(size)})')
     return torch.randn(batch_size, *size).cuda(),
 
 
@@ -107,7 +107,7 @@ pooling = {
 
 # Normalization
 def norm_inputs(norm, batch_size, size):
-    print(f'Tensor({batch_size}, {norm.num_features}, {args_str(size)})')
+    print(f'  Tensor({batch_size}, {norm.num_features}, {args_str(size)})')
     return torch.randn(batch_size, norm.num_features, *size).cuda(),
 
 
@@ -136,7 +136,7 @@ normalization = {
 
 # Recurrent Layers
 def rnn_inputs(rnn, batch_size, size):
-    print(f'Tensor({args_str(size)}, {batch_size}, {rnn.input_size})')
+    print(f'  Tensor({args_str(size)}, {batch_size}, {rnn.input_size})')
     num_directions = 1
 
     input = torch.randn(*size, batch_size, rnn.input_size).cuda()
@@ -170,9 +170,12 @@ recurrent = {
     ]
 }
 
+from functools import reduce
+import operator
+
 
 def run_check(spec, repeat=10, number=20, name=None):
-    chrono = MultiStageChrono()
+    chrono = MultiStageChrono(skip_obs=2)
 
     args = spec['args']
     input_gen = spec['inputs']
@@ -186,19 +189,38 @@ def run_check(spec, repeat=10, number=20, name=None):
 
             for batch_size in batch_sizes:
                 for tensor_size in tensor_sizes:
-                    name = f'algo={algo.__name__},batch={batch_size},tensor={tensor_size}_arg={arg}'
+                    name = f'algo={algo.__name__},batch={batch_size},tensor={tensor_size},arg={arg}'
                     print(name)
                     try:
                         input = input_gen(layer, batch_size, tensor_size)
+                        criterion = nn.MSELoss().cuda()
+                        target = None
+                        timer = None
+                        linear = None
+                        size = None
 
                         # Benchmark the layer
                         for i in range(0, repeat):
                             # ---
-                            with chrono.time(name) as t:
+                            with chrono.time(name) as timer:
                                 for _ in range(0, number):
 
-                                    layer(*input)
-                            # ---
+                                    out = layer(*input)
+
+                                    if target is None:
+                                        size = reduce(operator.mul, out.shape[1:])
+                                        target = torch.randn(batch_size, 1000).cuda()
+                                        linear = nn.Linear(size, 1000).cuda()
+
+                                    out = out.view(-1, size)
+                                    out = linear(out)
+                                    loss = criterion(out, target)
+                                    loss.backward()
+
+                                    torch.cuda.synchronize()
+
+                        print(f'  Ran in {timer.avg:5.2f}s {timer.avg * repeat:5.2f}s')
+                        # ---
                     except Exception as e:
                         print(f'[!] > {e}')
                         print(traceback.format_exc())
