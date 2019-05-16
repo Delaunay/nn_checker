@@ -1,6 +1,9 @@
 import traceback
 import json
 
+from operator import mul
+from functools import reduce
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
@@ -28,6 +31,14 @@ def args_str(args):
 def conv_inputs(conv, batch_size, size):
     print(f'  Tensor({batch_size}, {conv.in_channels}, {args_str(size)})')
     return torch.randn(batch_size, conv.in_channels, *size).cuda(),
+
+
+def backward(out):
+    return out
+
+
+def get_output_size(shape):
+    return reduce(mul, shape[1:])
 
 
 conv1d = [(1024,), (2048,), (8096,)]
@@ -61,7 +72,8 @@ convolutions = {
         (nn.ConvTranspose2d, conv2d),
         (nn.Conv3d,          conv3d),
         (nn.ConvTranspose1d, conv3d)
-    ]
+    ],
+    'get_output_layer': backward
 }
 
 
@@ -69,6 +81,10 @@ convolutions = {
 def pool_inputs(conv, batch_size, size):
     print(f'  Tensor({batch_size}, {args_str(size)})')
     return torch.randn(batch_size, *size).cuda(),
+
+
+def pool_backward(out, indices):
+    return out
 
 
 channels = [3, 128, 256]
@@ -89,19 +105,20 @@ pooling = {
         (nn.MaxPool2d,         pool_2d),
         (nn.MaxPool3d,         pool_3d),
         # The input is the output of MaxPool1d so this sucks
-        #(nn.MaxUnpool1d,       pool_1d),
-        #(nn.MaxUnpool2d,       pool_2d),
-        #(nn.MaxUnpool3d,       pool_3d),
-        (nn.AvgPool1d,         pool_1d),
-        (nn.AvgPool2d,         pool_2d),
-        (nn.AvgPool3d,         pool_3d),
-        (nn.AdaptiveAvgPool1d, pool_1d),
-        (nn.AdaptiveAvgPool2d, pool_2d),
-        (nn.AdaptiveAvgPool3d, pool_3d),
-        (nn.AdaptiveMaxPool1d, pool_1d),
-        (nn.AdaptiveMaxPool2d, pool_2d),
-        (nn.AdaptiveMaxPool3d, pool_3d),
-    ]
+        # (nn.MaxUnpool1d,       pool_1d),
+        # (nn.MaxUnpool2d,       pool_2d),
+        # (nn.MaxUnpool3d,       pool_3d),
+        # (nn.AvgPool1d,         pool_1d),
+        # (nn.AvgPool2d,         pool_2d),
+        # (nn.AvgPool3d,         pool_3d),
+        # (nn.AdaptiveAvgPool1d, pool_1d),
+        # (nn.AdaptiveAvgPool2d, pool_2d),
+        # (nn.AdaptiveAvgPool3d, pool_3d),
+        # (nn.AdaptiveMaxPool1d, pool_1d),
+        # (nn.AdaptiveMaxPool2d, pool_2d),
+        # (nn.AdaptiveMaxPool3d, pool_3d),
+    ],
+    'get_output_layer': pool_backward
 }
 
 
@@ -130,7 +147,8 @@ normalization = {
         (nn.InstanceNorm1d, norm_1d),
         (nn.InstanceNorm2d, norm_2d),
         (nn.InstanceNorm3d, norm_3d),
-    ]
+    ],
+    'get_output_layer': backward
 }
 
 
@@ -153,6 +171,15 @@ def rnn_relu(**kwargs):
     return nn.RNN(**kwargs, nonlinearity='relu')
 
 
+def rnn_backward(out, state):
+    return out
+
+
+def rnn_outsize(shape):
+    # Batch is in the middle this time
+    return shape[0] * shape[2]
+
+
 seq_length = [(6,), (12,), (24,), (32,)]
 recurrent = {
     'args': [
@@ -167,11 +194,10 @@ recurrent = {
         (rnn_relu,    seq_length),
         (nn.LSTM,     seq_length),
         (nn.GRU,      seq_length)
-    ]
+    ],
+    'get_output_layer': rnn_backward,
+    'get_output_size': rnn_outsize
 }
-
-from functools import reduce
-import operator
 
 
 def run_check(spec, repeat=10, number=20, name=None):
@@ -181,7 +207,10 @@ def run_check(spec, repeat=10, number=20, name=None):
     input_gen = spec['inputs']
     algos = spec['algos']
     batch_sizes = spec['batch_size']
+    get_output_layer = spec['get_output_layer']
+    get_output_size = spec['get_output_size']
 
+    
     for algo, tensor_sizes in algos:
         for arg in args:
             # initialize the conv layer that we will benchmark
@@ -193,28 +222,27 @@ def run_check(spec, repeat=10, number=20, name=None):
                     print(name)
                     try:
                         input = input_gen(layer, batch_size, tensor_size)
-                        criterion = nn.MSELoss().cuda()
                         target = None
-                        timer = None
-                        linear = None
                         size = None
+                        criterion = nn.MSELoss()
 
                         # Benchmark the layer
                         for i in range(0, repeat):
                             # ---
                             with chrono.time(name) as timer:
                                 for _ in range(0, number):
-
                                     out = layer(*input)
+                                    out = get_output_layer(*out)
 
                                     if target is None:
-                                        size = reduce(operator.mul, out.shape[1:])
-                                        target = torch.randn(batch_size, 1000).cuda()
-                                        linear = nn.Linear(size, 1000).cuda()
+                                        if get_output_size is None:
+                                            size = reduce(mul, out.shape[1:])
+                                        else:
+                                            size = get_output_size(out.shape)
 
-                                    out = out.view(-1, size)
-                                    out = linear(out)
-                                    loss = criterion(out, target)
+                                        target = torch.randn(batch_size, size).cuda()
+
+                                    loss = criterion(target, out.view(-1, size))
                                     loss.backward()
 
                                     torch.cuda.synchronize()
@@ -232,7 +260,7 @@ def run_check(spec, repeat=10, number=20, name=None):
         json.dump(report, open(name, 'w'), indent=2)
 
 
-run_check(convolutions, 20, 5, name='convolutions.json')
-run_check(pooling, 20, 5, name='pooling.json')
-run_check(normalization, 20, 5, name='norm.json')
+# run_check(convolutions, 20, 5, name='convolutions.json')
+# run_check(pooling, 20, 5, name='pooling.json')
+# run_check(normalization, 20, 5, name='norm.json')
 run_check(recurrent, 20, 5, name='recurrent.json')
