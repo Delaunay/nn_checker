@@ -132,7 +132,7 @@ norm_1d = conv1d
 norm_2d = conv2d
 norm_3d = conv3d
 
-normalization = {
+batch_norm = {
     'args': [
         dict(num_features=3),
         dict(num_features=128),
@@ -159,6 +159,10 @@ def rnn_inputs(rnn, batch_size, size):
 
     input = torch.randn(*size, batch_size, rnn.input_size).cuda()
     h0 = torch.randn(rnn.num_layers * num_directions, batch_size, rnn.hidden_size).cuda()
+
+    if isinstance(rnn, nn.LSTM):
+        c0 = torch.randn(rnn.num_layers * num_directions, batch_size, rnn.hidden_size).cuda()
+        h0 = (h0, c0)
 
     return input, h0
 
@@ -190,9 +194,9 @@ recurrent = {
     'batch_size': [32, 64, 128, 256],
     'inputs': rnn_inputs,
     'algos': [
+        (nn.LSTM,     seq_length),
         (rnn_tanh,    seq_length),
         (rnn_relu,    seq_length),
-        (nn.LSTM,     seq_length),
         (nn.GRU,      seq_length)
     ],
     'get_output_layer': rnn_backward,
@@ -200,7 +204,7 @@ recurrent = {
 }
 
 
-def run_check(spec, repeat=10, number=20, name=None):
+def run_check(spec, repeat=10, number=20, report_name=None):
     chrono = MultiStageChrono(skip_obs=2)
 
     args = spec['args']
@@ -210,7 +214,6 @@ def run_check(spec, repeat=10, number=20, name=None):
     get_output_layer = spec['get_output_layer']
     get_output_size = spec['get_output_size']
 
-    
     for algo, tensor_sizes in algos:
         for arg in args:
             # initialize the conv layer that we will benchmark
@@ -256,11 +259,42 @@ def run_check(spec, repeat=10, number=20, name=None):
     report = chrono.to_json(indent=2)
     print(report)
 
-    if name is not None:
-        json.dump(report, open(name, 'w'), indent=2)
+    if report_name is not None:
+        json.dump(report, open(report_name, 'w'), indent=2)
 
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--bench', nargs='*', type=str,
+            choices=['convolutions', 'pooling', 'batch_norm', 'recurrent'],
+            default=['recurrent'])
+
+    args = parser.parse_args()
+    variables = locals()
+    for bench in args.bench:
+        run_check(variables[bench], 20, 5, report_name='recurrent.json')
 
 # run_check(convolutions, 20, 5, name='convolutions.json')
 # run_check(pooling, 20, 5, name='pooling.json')
 # run_check(normalization, 20, 5, name='norm.json')
-run_check(recurrent, 20, 5, name='recurrent.json')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
