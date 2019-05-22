@@ -281,20 +281,3 @@ if __name__ == '__main__':
 # run_check(pooling, 20, 5, name='pooling.json')
 # run_check(normalization, 20, 5, name='norm.json')
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
