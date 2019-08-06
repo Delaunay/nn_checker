@@ -260,7 +260,8 @@ def run_check(spec, repeat=10, number=20, report_name=None):
     print(report)
 
     if report_name is not None:
-        json.dump(report, open(report_name, 'w'), indent=2)
+        with open(report_name, 'w') as file:
+            file.write(report)
 
 
 if __name__ == '__main__':
