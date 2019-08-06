@@ -21,7 +21,8 @@ report2 = fix_report(json.loads(open(args.file2, 'r').read()))
 acc = defaultdict(lambda: StatStream(drop_first_obs=0))
 
 
-bench_names = set(report1.keys()).union(set(report2.keys()))
+bench_names = list(set(report1.keys()).union(set(report2.keys())))
+bench_names.sort()
 
 for bench_name in bench_names:
     metrics1 = report1.get(bench_name)
